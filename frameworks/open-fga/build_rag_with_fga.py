@@ -1,11 +1,23 @@
 """
-RAG (Retrieval Augmented Generation) Implementation Module
+RAG (Retrieval Augmented Generation) with OpenFGA Access Control
 
-This module implements a RAG system that:
+This module implements a secure RAG system that:
 1. Loads and processes PDF documents
 2. Stores document embeddings in Qdrant vector store
-3. Retrieves relevant context for questions
-4. Generates answers using LLM
+3. Implements fine-grained access control using OpenFGA
+4. Retrieves relevant context for questions based on user permissions
+5. Generates answers using LLM while respecting access controls
+
+The system uses OpenFGA to manage document-level access permissions,
+ensuring users can only access documents they have been granted
+permission to view.
+
+Key Components:
+- Document Processing: PDF loading and chunking
+- Vector Store: Qdrant for document embeddings
+- Access Control: OpenFGA for fine-grained permissions
+- Retrieval: FGARetriever for permission-aware document retrieval
+- LLM: GPT-4 for answer generation
 
 Author: Your Name
 Date: 2024
@@ -13,6 +25,7 @@ Date: 2024
 
 import os
 import logging
+from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
 
@@ -27,9 +40,12 @@ from typing_extensions import List, TypedDict
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient, models
 from langchain.chat_models import init_chat_model
-from openfga_sdk.client.models import ClientBatchCheckItem
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from openfga_sdk import OpenFgaClient, ClientConfiguration
+from openfga_sdk.client.models import ClientCheckRequest, ClientBatchCheckItem
+
+from helpers.memory_store import MemoryStore
 
 # Configure logging
 logging.basicConfig(
@@ -51,7 +67,7 @@ class RAGError(Exception):
     """Base exception class for RAG-specific errors."""
     def __init__(self, message: str):
         super().__init__(message)
-        logger.error(message)
+        logger.error(message, exc_info=True)
 
 
 class RAG:
@@ -64,7 +80,8 @@ class RAG:
             self.vector_store = None
             self.graph_builder = None
             self.compiled_graph = None
-            
+            self.folder_path = "./knowledge"
+
             # Initialize LLM
             self.llm = init_chat_model(
                 model="gpt-4o-mini",
@@ -96,10 +113,10 @@ class RAG:
             )
             
             # Create collection if it doesn't exist
-            if not qdrant_client.collection_exists(collection_name="rag"):
-                logger.info("Creating new Qdrant collection: rag")
+            if not qdrant_client.collection_exists(collection_name=os.environ.get('QDRANT_COLLECTION')):
+                logger.info(f"Creating new Qdrant collection: {os.environ.get('QDRANT_COLLECTION')}")
                 qdrant_client.create_collection(
-                    collection_name="rag",
+                    collection_name=os.environ.get('QDRANT_COLLECTION'),
                     vectors_config=models.VectorParams(
                         size=3072,
                         distance=models.Distance.COSINE
@@ -108,7 +125,7 @@ class RAG:
             
             self.vector_store = QdrantVectorStore(
                 client=qdrant_client,
-                collection_name="rag",
+                collection_name=os.environ.get('QDRANT_COLLECTION'),
                 embedding=self.openai_embeddings,
             )
             logger.info("Vector store setup completed")
@@ -118,15 +135,19 @@ class RAG:
 
     def read_documents(self) -> List[Document]:
         """Load documents from PDF file."""
+        all_documents = []
         try:
-            loader = PyPDFLoader("./knowledge/Sudheer_Talluri_Resume.pdf")
-            documents = loader.load()
-
-            # Add metadata for document tracking
-            for doc in documents:
-                doc.metadata["doc_id"] = "Sudheer_Talluri_Resume.pdf"  # Attach PDF filename
-            logger.info(f"Loaded {len(documents)} documents")
-            return documents
+            pdf_files = list(Path(self.folder_path).glob("**/*.pdf"))
+            for pdf_path in pdf_files:
+                loader = PyPDFLoader(pdf_path)
+                documents = loader.load()
+                pdf_filename = os.path.basename(pdf_path)
+                # Add metadata for document tracking
+                for doc in documents:
+                    doc.metadata["doc_id"] = pdf_filename  # Attach PDF filename
+                logger.info(f"Loaded {len(documents)} documents")
+                all_documents.append(documents)
+            return all_documents
         except FileNotFoundError:
             raise RAGError("Required PDF document not found")
         except Exception as e:
@@ -147,10 +168,13 @@ class RAG:
                 logger.info(f"Retrieved {len(retrieved_docs)} relevant documents")
             else:
                 retriever = FGARetriever(
-                    retriever=self.vector_store.as_retriever(),
+                    retriever=self.vector_store.as_retriever(
+                        search_type="similarity_score_threshold",
+                        search_kwargs={'score_threshold': 0.8},
+                    ),
                     build_query=lambda doc: ClientBatchCheckItem(
                         user=f"user:{state['user_id']}",
-                        object=f"doc:{doc.metadata.get('doc_id')}",
+                        object=f"document:{doc.metadata.get('doc_id')}",
                         relation="viewer",
                     ),
                 )
@@ -180,15 +204,29 @@ class RAG:
         except Exception as e:
             raise RAGError(f"Failed to generate answer: {str(e)}")
 
-    def build_rag(self) -> None:
+    def build_rag(self, test: bool = False, full_build: bool = False) -> None:
         """Build the RAG pipeline."""
+        all_chunks = []
         try:
-            documents = self.read_documents()
-            chunks = self.text_splitter().split_documents(documents)
-            for chunk in chunks:
-                chunk.metadata["doc_id"] = documents[0].metadata["doc_id"]
-            self.setup_vector_store()
-            self.vector_store.add_documents(documents=chunks)
+            if full_build:
+                all_documents = self.read_documents()
+                logger.info(all_documents)
+                for documents in all_documents:
+                    chunks = self.text_splitter().split_documents(documents)
+                    logger.info(documents[0].metadata["doc_id"])
+                    for chunk in chunks:
+                        chunk.metadata["doc_id"] = documents[0].metadata["doc_id"]
+                    all_chunks.extend(chunks)
+                if not test:
+                    self.setup_vector_store()   
+                    self.vector_store.add_documents(documents=all_chunks)
+                else:
+                    self.vector_store = MemoryStore.from_documents(all_chunks)
+            else:
+                if not test:
+                    self.setup_vector_store()
+                else:
+                    self.vector_store = MemoryStore.from_documents(all_chunks)
             
             # Build the graph
             self.graph_builder = StateGraph(RAGState).add_sequence(
@@ -239,34 +277,50 @@ def start_rag() -> None:
     try:
         rag = RAG()
         logger.info("Starting RAG interactive session")
-        user_id = input("Enter the user ID: ")
-        action = input("Enter the action to perform, display, invoke or exit: ")
+        action = input("Enter the action to perform, recreate, display, invoke or exit: ")
         while action != "exit":
             try:
-                if action == "display":
+                if action == "recreate":
+                    rag.build_rag(full_build=True)
+                elif action == "display":
                     rag.display_graph()
                 elif action == "invoke":
+                    user_id = input("Enter the user ID: ")
                     question = input("Enter the question to ask: ")
-                    print(rag.invoke(question, user_id=user_id))
+                    while question != "exit":
+                        print(rag.invoke(question, user_id=user_id))
+                        question = input("Enter the question to ask: ")
+                elif action == "check_access":
+                    user_id = input("Enter the user ID: ")
+                    doc_id = input("Enter the document ID: ")
+                    body = ClientCheckRequest(
+                        user=f"user:{user_id}",
+                        object=f"document:{doc_id}",
+                        relation="viewer",
+                    )
+                    fga_client = OpenFgaClient(configuration=ClientConfiguration())
+                    response = fga_client.check(body)
+                    print(response)
                 else:
                     print("Invalid action. Please try again.")
                     
                 action = input(
-                    "Enter the action to perform, display, invoke or exit: "
+                    "Enter the action to perform, recreate, display, invoke or exit: "
                 )
                 
             except RAGError as e:
                 logger.error(f"Operation failed: {str(e)}")
                 print(f"Operation failed: {str(e)}")
                 action = input(
-                    "Enter the action to perform, display, invoke or exit: "
+                    "Enter the action to perform, recreate, display, invoke or exit: "
                 )
                 
         logger.info("RAG session ended")
         
     except Exception as e:
-        logger.critical(f"Critical error in RAG session: {str(e)}")
+        logger.critical(f"Critical error in RAG session: {str(e)}", exc_info=True)
         print(f"Critical error occurred: {str(e)}")
+        print("Check logs for full stack trace.")
 
 
 if __name__ == "__main__":
