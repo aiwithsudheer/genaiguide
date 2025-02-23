@@ -19,7 +19,7 @@ Key Components:
 - Retrieval: FGARetriever for permission-aware document retrieval
 - LLM: GPT-4 for answer generation
 
-Author: Your Name
+Author: Sudheer
 Date: 2024
 """
 
