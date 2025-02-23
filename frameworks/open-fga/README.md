@@ -119,10 +119,10 @@ curl -X POST ${OPENFGA_API_URL}/stores/${STORE_ID}/write \
 
 The system follows this flow:
 1. User submits a question with their user ID
-2. System retrieves relevant document chunks
-3. OpenFGA checks access permissions
-4. Only authorized chunks are used for answer generation
-5. LLM generates the final answer
+2. OpenFGA checks access permissions for available documents
+3. System retrieves relevant chunks from authorized documents only
+4. If relevant documents are found, LLM generates the answer using those chunks
+5. If no authorized documents are found or relevant, appropriate message is returned
 
 ## Error Handling
 
