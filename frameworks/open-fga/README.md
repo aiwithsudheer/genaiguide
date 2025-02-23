@@ -18,6 +18,10 @@ The system allows users to query documents while enforcing document-level access
 - PDF document support
 - Configurable chunking and embedding
 
+![OpenFGA Architecture](./arch.png)
+![OpenFGA Model Explorer](./model_explorer.png)
+![OpenFGA Tuple Management](./tuple_management.png)
+
 ## Setup
 
 1. Install dependencies:
