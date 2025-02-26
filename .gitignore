@@ -89,3 +89,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/ 
+
+
+# Gradio
+.gradio/
