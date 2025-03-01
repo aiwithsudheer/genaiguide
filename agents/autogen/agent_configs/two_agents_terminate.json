@@ -1,0 +1,17 @@
+{
+    "agents": [
+        {
+            "name": "MathTutor",
+            "system_message": "You are a helpful math tutor who explains concepts clearly and provides step-by-step solutions.",
+            "human_input_mode": "NEVER"
+        },
+        {
+            "name": "Student",
+            "system_message": "You are a student who asks thoughtful questions about mathematics and seeks clarification when needed.",
+            "human_input_mode": "NEVER"
+        }
+    ],
+    "interactions": {
+        "message": "Can you help me understand how to solve quadratic equations?"
+    }
+} 

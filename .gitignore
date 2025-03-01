@@ -89,6 +89,10 @@ venv/
 ENV/
 env.bak/
 venv.bak/ 
+venv-*/
+venv_*/
+
+.dev.vars
 
 
 # Gradio
