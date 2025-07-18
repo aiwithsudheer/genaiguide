@@ -69,7 +69,7 @@ portalocker==2.10.1
 protobuf==5.29.3
 psycopg==3.2.5
 puremagic==1.28
-pyautogen==0.7.6
+ag2==0.7.6
 pycparser==2.22
 pydantic==2.10.6
 pydantic-settings==2.8.1
